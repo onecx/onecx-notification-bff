@@ -1,0 +1,78 @@
+
+include::onecx-notification-bff-attributes.adoc[opts=optional]
+
+{docker-registry}[Link to Docker registry]
+
+== Default properties
+
+.{properties-file}
+[%collapsible]
+====
+[source,properties,subs=attributes+]
+----
+quarkus.http.auth.permission.health.paths=/q/*
+quarkus.http.auth.permission.health.policy=permit
+quarkus.http.auth.permission.default.paths=/*
+quarkus.http.auth.permission.default.policy=authenticated
+onecx.permissions.application-id=${quarkus.application.name}
+org.eclipse.microprofile.rest.client.propagateHeaders=apm-principal-token
+onecx.permissions.product-name=onecx-notification
+%prod.quarkus.rest-client.onecx_notification_svc.url=http://onecx-notification-svc:8080
+quarkus.openapi-generator.codegen.input-base-dir=target/tmp/openapi
+quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.config-key=onecx_notification_svc
+quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.base-package=gen.org.tkit.onecx.notification.svc.internal.client
+quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.return-response=true
+quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.additional-api-type-annotations=@org.eclipse.microprofile.rest.client.annotation.RegisterClientHeaders;
+quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.additional-model-type-annotations=@io.quarkus.runtime.annotations.RegisterForReflection;
+quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.enable-security-generation=false
+%prod.quarkus.oidc-client.client-id=${quarkus.application.name}
+%prod.quarkus.rest-client.onecx_notification_svc.providers=io.quarkus.oidc.client.reactive.filter.OidcClientRequestReactiveFilter
+## CLUSTER (Hazelcast via vertx-hazelcast)
+%prod.quarkus.vertx.cluster.clustered=true
+quarkus.http.auth.permission.eventbus.paths=/eventbus/*
+quarkus.http.auth.permission.eventbus.policy=permit
+quarkus.http.idle-timeout=0
+quarkus.vertx.eventbus.idle-timeout=0
+%prod.quarkus.log.category."com.hazelcast".level=WARNING
+----
+====
+
+== Extensions
+.Extensions List
+[%collapsible]
+====
+include::onecx-notification-bff-extensions.adoc[opts=optional]
+====
+
+== Helm
+
+{helm-registry}[Link to Helm registry]
+
+.Default values in {helm-file}
+[source,yaml]
+----
+app:
+ name: bff
+ image:
+  repository: "onecx/onecx-notification-bff"
+ operator:
+  # Permission
+  permission:
+   enabled: true
+   spec:
+    permissions:
+     notifications:
+      read: permission on all GET requests and POST search
+      write: permission on PUT, POST, PATCH requests, where objects are saved or updated
+      delete: permission on all DELETE requests
+  keycloak:
+   client:
+    enabled: true
+    spec:
+     kcConfig:
+      defaultClientScopes: [ ocx-no:all, ocx-pm:read ]
+  microservice:
+   spec:
+    description: OneCX Notification Backend For Frontend
+    name: OneCX Notification BFF
+----

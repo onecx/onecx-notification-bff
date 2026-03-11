@@ -1,2 +1,2 @@
-# onecx-notification-bff
-OneCX Notification Backend-For-Frontend
+# onecx-theme-bff
+OneCX Theme Backend-For-Frontend (BFF)

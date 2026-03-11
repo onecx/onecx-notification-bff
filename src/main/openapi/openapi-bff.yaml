@@ -1,0 +1,136 @@
+---
+openapi: 3.0.3
+info:
+ title: onecx-notification backend for frontend
+ description: This API provides endpoints for requesting and receiving notifications.
+ version: 1.0.0
+servers:
+ - url: "http://onecx-notification-bff:8080"
+tags:
+ - name: notificationInternal
+   description: Dispatching and Receiving Notifications
+paths:
+ /notifications/dispatch:
+  post:
+   security:
+    - oauth2: [ ocx-no:write ]
+   tags:
+    - notificationInternal
+   description: Dispatch a notification
+   operationId: dispatchNotification
+   requestBody:
+    required: true
+    content:
+     application/json:
+      schema:
+       $ref: '#/components/schemas/Notification'
+   responses:
+    200:
+     description: Notification dispatched successfully.
+    400:
+     description: Bad request
+     content:
+      application/json:
+       schema:
+        $ref: '#/components/schemas/ProblemDetailResponse'
+components:
+ securitySchemes:
+  oauth2:
+   type: oauth2
+   flows:
+    clientCredentials:
+     tokenUrl: https://oauth.simple.api/token
+     scopes:
+      ocx-no:write: Grants write access
+ schemas:
+  NotificationRetrieveResponse:
+   type: object
+   properties:
+    notifications:
+     type: array
+     items:
+      $ref: '#/components/schemas/Notification'
+  NotificationDispatchRequest:
+   type: object
+   properties:
+    notification:
+     $ref: '#/components/schemas/Notification'
+  NotificationRetrieveRequest:
+   type: object
+   properties:
+    receiverId:
+     type: string
+  Notification:
+   type: object
+   properties:
+    id:
+     type: string
+    applicationId:
+     type: string
+    senderId:
+     type: string
+    receiverId:
+     type: string
+    persist:
+     type: boolean
+    severity:
+     $ref: '#/components/schemas/Severity'
+    issuer:
+     $ref: '#/components/schemas/Issuer'
+    creationDate:
+     $ref: '#/components/schemas/OffsetDateTime'
+    contentMeta:
+     type: array
+     items:
+      $ref: '#/components/schemas/ContentMeta'
+  ContentMeta:
+   type: object
+   properties:
+    key:
+     type: string
+    value:
+     type: string
+  Severity:
+   type: string
+   enum:
+    - LOW
+    - NORMAL
+    - CRITICAL
+  Issuer:
+   type: string
+   enum:
+    - SYSTEM
+    - USER
+  ProblemDetailResponse:
+   type: object
+   properties:
+    errorCode:
+     type: string
+    detail:
+     type: string
+    params:
+     type: array
+     items:
+      $ref: '#/components/schemas/ProblemDetailParam'
+    invalidParams:
+     type: array
+     items:
+      $ref: '#/components/schemas/ProblemDetailInvalidParam'
+  ProblemDetailParam:
+   type: object
+   properties:
+    key:
+     type: string
+    value:
+     type: string
+  ProblemDetailInvalidParam:
+   type: object
+   properties:
+    name:
+     type: string
+    message:
+     type: string
+  OffsetDateTime:
+   format: date-time
+   type: string
+   example: 2022-03-10T12:15:50-04:00
