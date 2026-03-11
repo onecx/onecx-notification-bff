@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hazelcast cluster config for Kubernetes.
+  Pods discover each other via the Kubernetes API (LIST/WATCH on Endpoints).
+  Multicast is disabled (blocked in k8s CNI plugins).
+
+  Required RBAC:
+    - ServiceAccount bound to a Role that allows: get/list/watch on endpoints
+  Required Service:
+    - A headless ClusterIP Service named "onecx-notification-bff" exposing port 5701
+-->
+<hazelcast xmlns="http://www.hazelcast.com/schema/config"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xsi:schemaLocation="http://www.hazelcast.com/schema/config
+           https://hazelcast.com/schema/config/hazelcast-config-5.0.xsd">
+
+    <cluster-name>onecx-notification-cluster</cluster-name>
+
+    <network>
+        <port auto-increment="false">5701</port>
+        <join>
+            <multicast enabled="false"/>
+            <tcp-ip enabled="false"/>
+            <kubernetes enabled="true">
+                <!-- matches the headless Service name in Helm values -->
+                <service-name>onecx-notification-bff</service-name>
+                <service-port>5701</service-port>
+            </kubernetes>
+        </join>
+        <interfaces enabled="false"/>
+    </network>
+
+    <map name="notifications">
+        <!-- keep notifications for 1 hour max; evict LRU when heap is full -->
+        <time-to-live-seconds>3600</time-to-live-seconds>
+        <max-idle-seconds>3600</max-idle-seconds>
+        <eviction eviction-policy="LRU" max-size-policy="FREE_HEAP_PERCENTAGE" size="20"/>
+        <!-- sync backups: 1 (survives loss of 1 pod) -->
+        <backup-count>1</backup-count>
+        <async-backup-count>0</async-backup-count>
+    </map>
+
+</hazelcast>

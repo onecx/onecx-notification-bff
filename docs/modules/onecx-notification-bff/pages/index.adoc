@@ -1,0 +1,7 @@
+include::onecx-notification-bff-attributes.adoc[opts=optional]
+
+= OneCX Notification Backend For Frontend
+
+
+
+include::onecx-notification-bff-docs.adoc[opts=optional]

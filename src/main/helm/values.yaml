@@ -1,0 +1,15 @@
+app:
+ name: bff
+ image:
+  repository: "onecx/onecx-notification-bff"
+ operator:
+  keycloak:
+   client:
+    enabled: true
+    spec:
+     kcConfig:
+      defaultClientScopes: [ ocx-no:all, ocx-no:write ]
+  microservice:
+   spec:
+    description: OneCX Notification Backend For Frontend
+    name: OneCX Notification BFF
