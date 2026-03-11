@@ -7,15 +7,10 @@ import org.mapstruct.MappingConstants;
 
 import gen.org.tkit.onecx.notification.bff.rs.internal.model.NotificationDTO;
 import gen.org.tkit.onecx.notification.bff.rs.internal.model.NotificationRetrieveResponseDTO;
+import org.tkit.quarkus.rs.mappers.OffsetDateTimeMapper;
 
-/**
- * MapStruct mapper for notification DTO conversions.
- *
- * The domain model is the generated NotificationDTO (already Serializable and
- * stored directly in the Hazelcast IMap), so this mapper's primary job is
- * wrapping a list of notifications into the retrieve-response envelope.
- */
-@Mapper(componentModel = MappingConstants.ComponentModel.CDI)
+
+@Mapper(uses = OffsetDateTimeMapper.class)
 public interface NotificationMapper {
 
     /**
