@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Hazelcast cluster config for Kubernetes.
-  Pods discover each other via the Kubernetes API (LIST/WATCH on Endpoints).
-  Multicast is disabled (blocked in k8s CNI plugins).
+  Hazelcast cluster config for Kubernetes - DNS Lookup mode.
+  Pods discover each other by resolving the headless Service DNS name,
+  which Kubernetes automatically resolves to the IPs of all matching pods.
+  No RBAC / ServiceAccount permissions required for this mode.
 
-  Required RBAC:
-    - ServiceAccount bound to a Role that allows: get/list/watch on endpoints
-  Required Service:
-    - A headless ClusterIP Service named "onecx-notification-bff" exposing port 5701
+  Required Service (headless ClusterIP):
+    - clusterIP: None
+    - selector matching your pod labels
+    - port 5701
+  The service-dns below must be: SERVICE-NAME.NAMESPACE.svc.cluster.local
 -->
 <hazelcast xmlns="http://www.hazelcast.com/schema/config"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -19,11 +21,11 @@
     <network>
         <port auto-increment="false">5701</port>
         <join>
+            <auto-detection enabled="false"/>
             <multicast enabled="false"/>
             <tcp-ip enabled="false"/>
             <kubernetes enabled="true">
-                <!-- matches the headless Service name in Helm values -->
-                <service-name>onecx-notification-bff</service-name>
+                <service-dns>onecx-notification-bff-hazelcast.NAMESPACE.svc.cluster.local</service-dns>
                 <service-port>5701</service-port>
             </kubernetes>
         </join>

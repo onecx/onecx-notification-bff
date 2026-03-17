@@ -3,12 +3,10 @@ package org.tkit.onecx.notification.bff.rs.mappers;
 import java.util.List;
 
 import org.mapstruct.Mapper;
-import org.mapstruct.MappingConstants;
+import org.tkit.quarkus.rs.mappers.OffsetDateTimeMapper;
 
 import gen.org.tkit.onecx.notification.bff.rs.internal.model.NotificationDTO;
 import gen.org.tkit.onecx.notification.bff.rs.internal.model.NotificationRetrieveResponseDTO;
-import org.tkit.quarkus.rs.mappers.OffsetDateTimeMapper;
-
 
 @Mapper(uses = OffsetDateTimeMapper.class)
 public interface NotificationMapper {

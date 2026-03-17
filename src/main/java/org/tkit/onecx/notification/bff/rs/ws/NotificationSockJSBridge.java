@@ -37,20 +37,20 @@ import io.vertx.ext.web.handler.sockjs.SockJSHandlerOptions;
  * {@code /eventbus/*} and communicate using the SockJS EventBus protocol (JSON frames).
  *
  * Connection lifecycle:
- *   1. SOCKET_CREATED — a browser has opened the SockJS connection. Logged only.
- *   2. REGISTER — the browser subscribes to an EventBus address of the form
- *      {@code notifications.onecx.new.<receiverId>}. At this point:
- *        - The {@code receiverId} is added to {@link #ACTIVE_RECEIVERS} so the
- *          cluster service knows this pod has a live session for that receiver.
- *        - The IMap inbox is drained via
- *          {@link NotificationClusterService#consumeByReceiverId(String)} and each
- *          stored notification is immediately published to the local EventBus so the
- *          bridge delivers it to the client — no separate HTTP call needed.
- *        - Drained notifications with {@code persist=true} are marked as delivered
- *          via the downstream SVC REST client.
- *   3. SOCKET_CLOSED — the SockJS connection was closed. {@link #ACTIVE_RECEIVERS}
- *      is cleared so the cluster service will no longer remove IMap entries for subsequent
- *      topic deliveries, allowing missed messages to accumulate until the next REGISTER.
+ * 1. SOCKET_CREATED — a browser has opened the SockJS connection. Logged only.
+ * 2. REGISTER — the browser subscribes to an EventBus address of the form
+ * {@code notifications.onecx.new.<receiverId>}. At this point:
+ * - The {@code receiverId} is added to {@link #ACTIVE_RECEIVERS} so the
+ * cluster service knows this pod has a live session for that receiver.
+ * - The IMap inbox is drained via
+ * {@link NotificationClusterService#consumeByReceiverId(String)} and each
+ * stored notification is immediately published to the local EventBus so the
+ * bridge delivers it to the client — no separate HTTP call needed.
+ * - Drained notifications with {@code persist=true} are marked as delivered
+ * via the downstream SVC REST client.
+ * 3. SOCKET_CLOSED — the SockJS connection was closed. {@link #ACTIVE_RECEIVERS}
+ * is cleared so the cluster service will no longer remove IMap entries for subsequent
+ * topic deliveries, allowing missed messages to accumulate until the next REGISTER.
  *
  * Security:
  * Only outbound addresses ({@code notifications.onecx.new.*}) are permitted.
@@ -124,20 +124,20 @@ public class NotificationSockJSBridge {
      * traffic on the {@code notifications.onecx.new.*} address namespace.
      *
      * A bridge event handler intercepts all SockJS lifecycle events:
-     *   - SOCKET_CREATED — logs the new connection's remote address.
-     *   - SOCKET_CLOSED — clears {@link #ACTIVE_RECEIVERS} so the cluster service
-     *     stops removing IMap entries for this pod until the client reconnects and
-     *     re-registers. Since SockJS does not expose per-socket address info on close,
-     *     the whole set is cleared and rebuilt from REGISTER events on reconnect.
-     *   - REGISTER — when the address matches the notification namespace:
-     *       1. Extracts the {@code receiverId} from the address suffix.
-     *       2. Adds the {@code receiverId} to {@link #ACTIVE_RECEIVERS}.
-     *       3. Calls {@link NotificationClusterService#consumeByReceiverId(String)} to
-     *          atomically drain the IMap inbox.
-     *       4. Publishes each drained notification as JSON to the raw (non-Mutiny) local
-     *          EventBus so the bridge immediately forwards it to the waiting browser.
-     *       5. For each drained notification with {@code persist=true}, calls
-     *          {@code markNotificationAsDelivered(id)} on the downstream SVC.
+     * - SOCKET_CREATED — logs the new connection's remote address.
+     * - SOCKET_CLOSED — clears {@link #ACTIVE_RECEIVERS} so the cluster service
+     * stops removing IMap entries for this pod until the client reconnects and
+     * re-registers. Since SockJS does not expose per-socket address info on close,
+     * the whole set is cleared and rebuilt from REGISTER events on reconnect.
+     * - REGISTER — when the address matches the notification namespace:
+     * 1. Extracts the {@code receiverId} from the address suffix.
+     * 2. Adds the {@code receiverId} to {@link #ACTIVE_RECEIVERS}.
+     * 3. Calls {@link NotificationClusterService#consumeByReceiverId(String)} to
+     * atomically drain the IMap inbox.
+     * 4. Publishes each drained notification as JSON to the raw (non-Mutiny) local
+     * EventBus so the bridge immediately forwards it to the waiting browser.
+     * 5. For each drained notification with {@code persist=true}, calls
+     * {@code markNotificationAsDelivered(id)} on the downstream SVC.
      *
      * All bridge events call {@code bridgeEvent.complete(true)} to allow the event to
      * proceed normally (i.e. nothing is blocked or rejected here).
@@ -174,11 +174,9 @@ public class NotificationSockJSBridge {
                         ACTIVE_RECEIVERS.clear();
 
                     } else if (bridgeEvent.type() == BridgeEventType.REGISTER) {
-                        String address = bridgeEvent.getRawMessage() != null
-                                ? bridgeEvent.getRawMessage().getString("address")
-                                : null;
+                        String address = bridgeEvent.getRawMessage().getString("address");
 
-                        if (address != null && address.startsWith(NotificationClusterService.EB_ADDRESS_PREFIX)) {
+                        if (address.startsWith(NotificationClusterService.EB_ADDRESS_PREFIX)) {
                             // Extract receiverId from "notifications.new.<receiverId>"
                             String receiverId = address.substring(
                                     NotificationClusterService.EB_ADDRESS_PREFIX.length());
@@ -203,18 +201,22 @@ public class NotificationSockJSBridge {
                                                         String json = objectMapper.writeValueAsString(n);
                                                         // publish locally — SockJS bridge delivers to this client
                                                         rawEventBus.publish(address, json);
-                                                        // Mark persisted notifications as delivered
+                                                        // Mark persisted notifications as delivered.
+                                                        // Must run on a worker thread — the RESTEasy Reactive
+                                                        // blocking client cannot be called from the event loop.
                                                         if (Boolean.TRUE.equals(n.getPersist()) && n.getId() != null) {
-                                                            try (var r = notificationSVCClient
-                                                                    .markNotificationAsDelivered(n.getId())) {
-                                                                LOG.debugf(
-                                                                        "Marked stored notification id='%s' as delivered (status=%d)",
-                                                                        n.getId(), r.getStatus());
-                                                            } catch (Exception ex) {
-                                                                LOG.warnf(
-                                                                        "Failed to mark stored notification id='%s' as delivered: %s",
-                                                                        n.getId(), ex.getMessage());
-                                                            }
+                                                            final String notifId = n.getId();
+                                                            vertx.executeBlocking(() -> {
+                                                                @SuppressWarnings("resource")
+                                                                var r = notificationSVCClient
+                                                                        .markNotificationAsDelivered(notifId);
+                                                                return r.getStatus();
+                                                            }).onSuccess(status -> LOG.debugf(
+                                                                    "Marked stored notification id='%s' as delivered (status=%d)",
+                                                                    notifId, status))
+                                                                    .onFailure(ex -> LOG.warnf(
+                                                                            "Failed to mark stored notification id='%s' as delivered: %s",
+                                                                            notifId, ex.getMessage()));
                                                         }
                                                     } catch (Exception e) {
                                                         LOG.errorf("Failed to serialize notification: %s",
