@@ -19,7 +19,6 @@ import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.topic.ITopic;
 
 import gen.org.tkit.onecx.notification.bff.rs.internal.model.NotificationDTO;
-import gen.org.tkit.onecx.notification.bff.rs.internal.model.NotificationRetrieveRequestDTO;
 import gen.org.tkit.onecx.notification.svc.internal.client.api.NotificationInternalApi;
 import io.quarkus.runtime.StartupEvent;
 import io.smallrye.mutiny.Uni;
@@ -32,20 +31,20 @@ import io.vertx.mutiny.core.shareddata.AsyncMap;
  *
  * Architecture overview:
  *
- *   REST /dispatch
- *       │
- *       ▼
- *   storeNotification()
- *       ├─► Hazelcast IMap  (keyed by receiverId — persists across pod restarts)
- *       └─► Hazelcast ITopic  (cluster broadcast — ALL pods receive every publish)
- *                │
- *                ▼  (on every pod, including the one that published)
- *           topic listener
- *               ├─► Vert.x EventBus.publish(localAddress)
- *               │       └─► SockJS bridge forwards to connected browser
- *               └─► if receiver is currently connected on THIS pod:
- *                       ├─► remove entry from IMap  (prevent re-delivery on reconnect)
- *                       └─► if persist=true: markNotificationAsDelivered() on SVC
+ * REST /dispatch
+ * │
+ * ▼
+ * storeNotification()
+ * ├─► Hazelcast IMap (keyed by receiverId — persists across pod restarts)
+ * └─► Hazelcast ITopic (cluster broadcast — ALL pods receive every publish)
+ * │
+ * ▼ (on every pod, including the one that published)
+ * topic listener
+ * ├─► Vert.x EventBus.publish(localAddress)
+ * │ └─► SockJS bridge forwards to connected browser
+ * └─► if receiver is currently connected on THIS pod:
+ * ├─► remove entry from IMap (prevent re-delivery on reconnect)
+ * └─► if persist=true: markNotificationAsDelivered() on SVC
  *
  * Offline / missed-message handling:
  * When a receiver is not connected at delivery time, the notification stays in
@@ -54,10 +53,10 @@ import io.vertx.mutiny.core.shareddata.AsyncMap;
  * inbox and pushes each stored notification directly to the client.
  *
  * Key constants:
- *   - {@link #MAP_NAME} — name of the cluster-wide Hazelcast IMap used as the inbox store
- *   - {@link #EB_ADDRESS_PREFIX} — prefix of the local Vert.x EventBus addresses;
- *       full address is {@code EB_ADDRESS_PREFIX + receiverId}
- *   - {@code TOPIC_NAME} — name of the Hazelcast ITopic used for cross-pod fan-out
+ * - {@link #MAP_NAME} — name of the cluster-wide Hazelcast IMap used as the inbox store
+ * - {@link #EB_ADDRESS_PREFIX} — prefix of the local Vert.x EventBus addresses;
+ * full address is {@code EB_ADDRESS_PREFIX + receiverId}
+ * - {@code TOPIC_NAME} — name of the Hazelcast ITopic used for cross-pod fan-out
  */
 @ApplicationScoped
 @LogService
@@ -75,8 +74,7 @@ public class NotificationClusterService {
     public static final String EB_ADDRESS_PREFIX = "notifications.onecx.new.";
 
     /** Name of the Hazelcast ITopic used to broadcast notifications to every pod in the cluster. */
-    private static final String TOPIC_NAME = "notifications.onecx.topic";
-
+    static final String TOPIC_NAME = "notifications.onecx.topic";
     private static final Logger LOG = Logger.getLogger(NotificationClusterService.class);
 
     @Inject
@@ -114,16 +112,16 @@ public class NotificationClusterService {
      *
      * The listener runs on a Hazelcast thread (not a Vert.x thread). For every received
      * topic message it:
-     *   1. Deserializes the JSON payload back into a {@link NotificationDTO}.
-     *   2. Switches onto the Vert.x event loop via {@code vertx.runOnContext()} so that
-     *      the EventBus publish is thread-safe.
-     *   3. Publishes the raw JSON string to the local Vert.x EventBus address
-     *      ({@link #EB_ADDRESS_PREFIX} + receiverId) so the SockJS bridge can
-     *      forward it to any browser session registered on that address on this pod.
-     *   4. If {@link NotificationSockJSBridge#hasActiveReceiver(String)} returns {@code true}
-     *      (i.e. the receiver has an open SockJS session on this pod):
-     *        - Removes the notification list from the IMap to prevent re-delivery on reconnect.
-     *        - If {@code persist=true}, calls {@code markNotificationAsDelivered(id)} on the SVC.
+     * 1. Deserializes the JSON payload back into a {@link NotificationDTO}.
+     * 2. Switches onto the Vert.x event loop via {@code vertx.runOnContext()} so that
+     * the EventBus publish is thread-safe.
+     * 3. Publishes the raw JSON string to the local Vert.x EventBus address
+     * ({@link #EB_ADDRESS_PREFIX} + receiverId) so the SockJS bridge can
+     * forward it to any browser session registered on that address on this pod.
+     * 4. If {@link NotificationSockJSBridge#hasActiveReceiver(String)} returns {@code true}
+     * (i.e. the receiver has an open SockJS session on this pod):
+     * - Removes the notification list from the IMap to prevent re-delivery on reconnect.
+     * - If {@code persist=true}, calls {@code markNotificationAsDelivered(id)} on the SVC.
      */
     void onStart(@Observes StartupEvent ev) {
         // Hazelcast registers its instance globally — retrieve it without any casting or CDI tricks
@@ -147,21 +145,27 @@ public class NotificationClusterService {
                     if (NotificationSockJSBridge.hasActiveReceiver(receiverId)) {
                         Boolean persist = notification.getPersist();
                         String notificationId = notification.getId();
-                        map().flatMap(m -> m.remove(receiverId))
+                        removeFromMap(receiverId)
                                 .subscribe().with(
                                         ignored -> {
                                             LOG.infof(
                                                     "Removed live-delivered notification from IMap key='%s'",
                                                     receiverId);
                                             if (Boolean.TRUE.equals(persist) && notificationId != null) {
-                                                try (var r = notificationSVCClient
-                                                        .markNotificationAsDelivered(notificationId)) {
-                                                    LOG.infof("Marked notification id='%s' as delivered (status=%d)",
-                                                            notificationId, r.getStatus());
-                                                } catch (Exception ex) {
-                                                    LOG.warnf("Failed to mark notification id='%s' as delivered: %s",
-                                                            notificationId, ex.getMessage());
-                                                }
+                                                // Must run on a worker thread — the RESTEasy Reactive
+                                                // blocking client cannot be called from the event loop.
+                                                vertx.executeBlocking(() -> {
+                                                    @SuppressWarnings("resource")
+                                                    var r = notificationSVCClient
+                                                            .markNotificationAsDelivered(notificationId);
+                                                    return r.getStatus();
+                                                }).subscribe().with(
+                                                        status -> LOG.infof(
+                                                                "Marked notification id='%s' as delivered (status=%d)",
+                                                                notificationId, status),
+                                                        ex -> LOG.warnf(
+                                                                "Failed to mark notification id='%s' as delivered: %s",
+                                                                notificationId, ex.getMessage()));
                                             }
                                         },
                                         err -> LOG.warnf(
@@ -199,17 +203,31 @@ public class NotificationClusterService {
     }
 
     /**
+     * Removes the notification list for the given {@code receiverId} from the cluster-wide IMap.
+     * Called by the Hazelcast topic listener after live delivery to prevent re-delivery on reconnect.
+     *
+     * Extracted as a protected method so that CDI alternatives in tests can override it to
+     * simulate IMap remove failures and exercise the error-handler branch in the topic listener.
+     *
+     * @param receiverId the receiver whose inbox entry should be removed
+     * @return a {@link Uni} that emits the removed list, or fails if the map operation fails
+     */
+    protected Uni<List<NotificationDTO>> removeFromMap(String receiverId) {
+        return map().flatMap(m -> m.remove(receiverId));
+    }
+
+    /**
      * Stores a notification in the cluster-wide IMap and broadcasts it to all pods.
      *
      * Steps performed:
-     *   1. Resolves the cluster-wide {@link AsyncMap} keyed by {@code receiverId}.
-     *   2. Fetches the existing list for that receiver (or starts a new empty list).
-     *   3. Appends the new notification and writes the updated list back to the IMap.
-     *      This ensures offline receivers can still retrieve the notification later.
-     *   4. Serializes the full {@link NotificationDTO} to JSON via {@link ObjectMapper}
-     *      and publishes it to the Hazelcast ITopic. Because the topic is a true
-     *      pub/sub, every pod in the cluster (including this one) will receive
-     *      the message in their registered MessageListener.
+     * 1. Resolves the cluster-wide {@link AsyncMap} keyed by {@code receiverId}.
+     * 2. Fetches the existing list for that receiver (or starts a new empty list).
+     * 3. Appends the new notification and writes the updated list back to the IMap.
+     * This ensures offline receivers can still retrieve the notification later.
+     * 4. Serializes the full {@link NotificationDTO} to JSON via {@link ObjectMapper}
+     * and publishes it to the Hazelcast ITopic. Because the topic is a true
+     * pub/sub, every pod in the cluster (including this one) will receive
+     * the message in their registered MessageListener.
      *
      * The IMap key is {@code receiverId} only — {@code applicationId} is part of the
      * DTO payload and is used by the frontend for display purposes, not for routing.

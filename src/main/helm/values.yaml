@@ -13,3 +13,29 @@ app:
    spec:
     description: OneCX Notification Backend For Frontend
     name: OneCX Notification BFF
+ # Extra env vars injected into the Deployment
+ # POD_IP is used by Vert.x as the cluster host so other pods can reach this node
+ extraEnv:
+  - name: POD_IP
+    valueFrom:
+     fieldRef:
+      fieldPath: status.podIP
+  - name: QUARKUS_VERTX_CLUSTER_HOST
+    valueFrom:
+     fieldRef:
+      fieldPath: status.podIP
+ # Headless Service for Hazelcast DNS Lookup discovery.
+ # Kubernetes resolves the service DNS to the IPs of all matching pods.
+ # Name must match the service-dns in hazelcast.xml (before the namespace part).
+ extraServices:
+  - name: onecx-notification-bff-hazelcast
+    labels:
+     app.kubernetes.io/name: onecx-notification-bff
+    spec:
+     type: ClusterIP
+     clusterIP: None
+     ports:
+      - name: hazelcast
+        port: 5701
+        protocol: TCP
+        targetPort: 5701
