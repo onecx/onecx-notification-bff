@@ -21,7 +21,7 @@
             <multicast enabled="false"/>
             <tcp-ip enabled="true">
                 <!-- must match the SERVICE names in docker-compose.yml -->
-                <member>onecx-notification-bff-1:5701</member>
+                <member>onecx-notification-bff:5701</member>
                 <member>onecx-notification-bff-2:5701</member>
             </tcp-ip>
             <kubernetes enabled="false"/>
