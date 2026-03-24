@@ -25,6 +25,7 @@ quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.addi
 quarkus.openapi-generator.codegen.spec.onecx_notification_internal_svc_yaml.enable-security-generation=false
 %prod.quarkus.oidc-client.client-id=${quarkus.application.name}
 %prod.quarkus.rest-client.onecx_notification_svc.providers=io.quarkus.oidc.client.reactive.filter.OidcClientRequestReactiveFilter
+tkit.security-dynamic-test.openapi.enabled-integration-test=false
 ## CLUSTER (Hazelcast via vertx-hazelcast)
 %prod.quarkus.vertx.cluster.clustered=true
 %prod.quarkus.vertx.cluster.host=${POD_IP:0.0.0.0}
