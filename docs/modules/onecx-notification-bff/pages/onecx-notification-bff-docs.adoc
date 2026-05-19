@@ -34,9 +34,8 @@ tkit.security-dynamic-test.openapi.enabled-integration-test=false
 %prod.quarkus.vertx.cluster.host=${POD_IP:0.0.0.0}
 quarkus.http.auth.permission.eventbus.paths=/eventbus/*
 quarkus.http.auth.permission.eventbus.policy=permit
-## Keep long-lived WebSocket / SockJS connections alive.
-## idle-timeout=0 disables the HTTP connection idle timeout server-wide
-## Vert.x underlying TCP options ? disable idle timeout on the HTTP server transport
+%prod.hazelcast.config.file=/deployments/hazelcast-k8s.xml
+%prod.quarkus.log.category."com.hazelcast".level=INFO
 ----
 ====
 
@@ -70,30 +69,55 @@ app:
     description: OneCX Notification Backend For Frontend
     name: OneCX Notification BFF
  # Extra env vars injected into the Deployment
- # POD_IP is used by Vert.x as the cluster host so other pods can reach this node
+ # POD_IP is used by Vert.x as the cluster host via application.properties
  extraEnv:
   - name: POD_IP
     valueFrom:
      fieldRef:
       fieldPath: status.podIP
-  - name: QUARKUS_VERTX_CLUSTER_HOST
-    valueFrom:
-     fieldRef:
-      fieldPath: status.podIP
+ # Environment variables rendered by helm-quarkus-app into the container env list
+ env:
+  JAVA_OPTS: "-Dvertx.hazelcast.config=/deployments/hazelcast-k8s.xml -Dhazelcast.config=/deployments/hazelcast-k8s.xml"
  # Headless Service for Hazelcast DNS Lookup discovery.
- # Kubernetes resolves the service DNS to the IPs of all matching pods.
- # Name must match the service-dns in hazelcast.xml (before the namespace part).
- extraServices:
-  - name: onecx-notification-bff-hazelcast
-    labels:
-     app.kubernetes.io/name: onecx-notification-bff
-    spec:
-     type: ClusterIP
-     clusterIP: None
-     ports:
-      - name: hazelcast
-        port: 5701
-        protocol: TCP
-        targetPort: 5701
+ # Rendered via templates/hazelcast-service.yaml.
+ hazelcast:
+  enabled: true
+  serviceName: onecx-notification-bff-hazelcast
+   # Reuse helm-quarkus-app data.import configmap+mount hooks to mount hazelcast-k8s.xml.
+ data:
+  import:
+   enabled: true
+   name: hazelcast-config
+   mountPath: /deployments/hazelcast-k8s.xml
+   subPath: hazelcast-k8s.xml
+   suffix: hazelcast-config
+   values: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <hazelcast xmlns="http://www.hazelcast.com/schema/config"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://www.hazelcast.com/schema/config
+               https://hazelcast.com/schema/config/hazelcast-config-5.3.xsd">
+        <cluster-name>onecx-notification-cluster</cluster-name>
+        <network>
+            <port auto-increment="false">5701</port>
+            <join>
+                <auto-detection enabled="false"/>
+                <multicast enabled="false"/>
+                <tcp-ip enabled="false"/>
+                <kubernetes enabled="true">
+                    <service-dns>onecx-notification-bff-hazelcast</service-dns>
+                    <service-port>5701</service-port>
+                </kubernetes>
+            </join>
+            <interfaces enabled="false"/>
+        </network>
+        <map name="notifications">
+            <time-to-live-seconds>3600</time-to-live-seconds>
+            <max-idle-seconds>3600</max-idle-seconds>
+            <eviction eviction-policy="LRU" max-size-policy="FREE_HEAP_PERCENTAGE" size="20"/>
+            <backup-count>1</backup-count>
+            <async-backup-count>0</async-backup-count>
+        </map>
+    </hazelcast>
 
 ----

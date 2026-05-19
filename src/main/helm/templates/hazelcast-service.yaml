@@ -1,0 +1,20 @@
+{{- if and .Values.app.hazelcast (.Values.app.hazelcast.enabled) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.app.hazelcast.serviceName | default (printf "%s-%s-hazelcast" .Release.Name (.Values.app.name | default .Chart.Name)) }}
+  labels:
+    app.kubernetes.io/name: {{ printf "%s-%s" .Release.Name (.Values.app.name | default .Chart.Name) }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  # Expose Pod DNS entries before readiness to reduce bootstrap races for Hazelcast discovery.
+  publishNotReadyAddresses: true
+  selector:
+    app: {{ printf "%s-%s" .Release.Name (.Values.app.name | default .Chart.Name) }}
+  ports:
+    - name: hazelcast
+      port: 5701
+      protocol: TCP
+      targetPort: 5701
+{{- end }}

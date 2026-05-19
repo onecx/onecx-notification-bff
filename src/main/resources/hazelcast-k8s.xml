@@ -9,12 +9,13 @@
     - clusterIP: None
     - selector matching your pod labels
     - port 5701
-  The service-dns below must be: SERVICE-NAME.NAMESPACE.svc.cluster.local
+  The service-dns below can be the short headless Service name when pods run
+  in the same namespace as the Service.
 -->
 <hazelcast xmlns="http://www.hazelcast.com/schema/config"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
            xsi:schemaLocation="http://www.hazelcast.com/schema/config
-           https://hazelcast.com/schema/config/hazelcast-config-5.0.xsd">
+           https://hazelcast.com/schema/config/hazelcast-config-5.3.xsd">
 
     <cluster-name>onecx-notification-cluster</cluster-name>
 
@@ -25,7 +26,7 @@
             <multicast enabled="false"/>
             <tcp-ip enabled="false"/>
             <kubernetes enabled="true">
-                <service-dns>onecx-notification-bff-hazelcast.NAMESPACE.svc.cluster.local</service-dns>
+                <service-dns>onecx-notification-bff-hazelcast</service-dns>
                 <service-port>5701</service-port>
             </kubernetes>
         </join>
