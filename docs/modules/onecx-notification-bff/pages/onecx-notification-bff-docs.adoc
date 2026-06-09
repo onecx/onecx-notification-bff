@@ -34,6 +34,9 @@ tkit.security-dynamic-test.openapi.enabled-integration-test=false
 %prod.quarkus.vertx.cluster.host=${POD_IP:0.0.0.0}
 quarkus.http.auth.permission.eventbus.paths=/eventbus/*
 quarkus.http.auth.permission.eventbus.policy=permit
+## Keep long-lived WebSocket / SockJS connections alive.
+## idle-timeout=0 disables the HTTP connection idle timeout server-wide
+## Vert.x underlying TCP options ? disable idle timeout on the HTTP server transport
 %prod.hazelcast.config.file=/deployments/hazelcast-k8s.xml
 %prod.quarkus.log.category."com.hazelcast".level=INFO
 ----
@@ -54,6 +57,7 @@ include::onecx-notification-bff-extensions.adoc[opts=optional]
 [source,yaml]
 ----
 app:
+ replicas: 2
  name: bff
  image:
   repository: "onecx/onecx-notification-bff"
@@ -68,22 +72,21 @@ app:
    spec:
     description: OneCX Notification Backend For Frontend
     name: OneCX Notification BFF
- # Extra env vars injected into the Deployment
- # POD_IP is used by Vert.x as the cluster host via application.properties
- extraEnv:
-  - name: POD_IP
-    valueFrom:
-     fieldRef:
-      fieldPath: status.podIP
  # Environment variables rendered by helm-quarkus-app into the container env list
  env:
   JAVA_OPTS: "-Dvertx.hazelcast.config=/deployments/hazelcast-k8s.xml -Dhazelcast.config=/deployments/hazelcast-k8s.xml"
+ # Custom env vars with valueFrom (Kubernetes Downward API)
+ # POD_IP is used by Vert.x as the cluster host via application.properties
+ envCustom:
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
  # Headless Service for Hazelcast DNS Lookup discovery.
  # Rendered via templates/hazelcast-service.yaml.
  hazelcast:
   enabled: true
   serviceName: onecx-notification-bff-hazelcast
-   # Reuse helm-quarkus-app data.import configmap+mount hooks to mount hazelcast-k8s.xml.
  data:
   import:
    enabled: true

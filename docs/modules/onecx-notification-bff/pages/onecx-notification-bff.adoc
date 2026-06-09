@@ -7,7 +7,7 @@ h|[.header-title]##Configuration property##
 h|Type
 h|Default
 
-a| [[onecx-notification-bff_onecx-notification-token-verified]] [.property-path]##link:#onecx-notification-bff_onecx-notification-token-verified[`onecx.notification.token.verified`]##
+a| [[onecx-notification-bff_onecx-notification-token-verified]] [.property-path]##link:#onecx-notification-bff_onecx-notification-token-verified[`+++onecx.notification.token.verified+++`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++onecx.notification.token.verified+++[]
 endif::add-copy-button-to-config-props[]
@@ -28,7 +28,7 @@ endif::add-copy-button-to-env-var[]
 |boolean
 |`+++false+++`
 
-a| [[onecx-notification-bff_onecx-notification-token-issuer-public-key-location-suffix]] [.property-path]##link:#onecx-notification-bff_onecx-notification-token-issuer-public-key-location-suffix[`onecx.notification.token.issuer.public-key-location.suffix`]##
+a| [[onecx-notification-bff_onecx-notification-token-issuer-public-key-location-suffix]] [.property-path]##link:#onecx-notification-bff_onecx-notification-token-issuer-public-key-location-suffix[`+++onecx.notification.token.issuer.public-key-location.suffix+++`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++onecx.notification.token.issuer.public-key-location.suffix+++[]
 endif::add-copy-button-to-config-props[]
@@ -49,7 +49,7 @@ endif::add-copy-button-to-env-var[]
 |string
 |`+++/protocol/openid-connect/certs+++`
 
-a| [[onecx-notification-bff_onecx-notification-token-issuer-public-key-location-enabled]] [.property-path]##link:#onecx-notification-bff_onecx-notification-token-issuer-public-key-location-enabled[`onecx.notification.token.issuer.public-key-location.enabled`]##
+a| [[onecx-notification-bff_onecx-notification-token-issuer-public-key-location-enabled]] [.property-path]##link:#onecx-notification-bff_onecx-notification-token-issuer-public-key-location-enabled[`+++onecx.notification.token.issuer.public-key-location.enabled+++`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++onecx.notification.token.issuer.public-key-location.enabled+++[]
 endif::add-copy-button-to-config-props[]
@@ -70,7 +70,7 @@ endif::add-copy-button-to-env-var[]
 |boolean
 |`+++false+++`
 
-a| [[onecx-notification-bff_onecx-notification-websocket-heartbeat-interval]] [.property-path]##link:#onecx-notification-bff_onecx-notification-websocket-heartbeat-interval[`onecx.notification.websocket.heartbeat-interval`]##
+a| [[onecx-notification-bff_onecx-notification-websocket-heartbeat-interval]] [.property-path]##link:#onecx-notification-bff_onecx-notification-websocket-heartbeat-interval[`+++onecx.notification.websocket.heartbeat-interval+++`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++onecx.notification.websocket.heartbeat-interval+++[]
 endif::add-copy-button-to-config-props[]
@@ -91,7 +91,7 @@ endif::add-copy-button-to-env-var[]
 |string
 |`+++25000+++`
 
-a| [[onecx-notification-bff_onecx-notification-websocket-session-timeout]] [.property-path]##link:#onecx-notification-bff_onecx-notification-websocket-session-timeout[`onecx.notification.websocket.session-timeout`]##
+a| [[onecx-notification-bff_onecx-notification-websocket-session-timeout]] [.property-path]##link:#onecx-notification-bff_onecx-notification-websocket-session-timeout[`+++onecx.notification.websocket.session-timeout+++`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++onecx.notification.websocket.session-timeout+++[]
 endif::add-copy-button-to-config-props[]
@@ -112,7 +112,7 @@ endif::add-copy-button-to-env-var[]
 |string
 |`+++30000+++`
 
-a| [[onecx-notification-bff_onecx-notification-websocket-ping-timeout]] [.property-path]##link:#onecx-notification-bff_onecx-notification-websocket-ping-timeout[`onecx.notification.websocket.ping-timeout`]##
+a| [[onecx-notification-bff_onecx-notification-websocket-ping-timeout]] [.property-path]##link:#onecx-notification-bff_onecx-notification-websocket-ping-timeout[`+++onecx.notification.websocket.ping-timeout+++`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++onecx.notification.websocket.ping-timeout+++[]
 endif::add-copy-button-to-config-props[]
