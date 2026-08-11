@@ -8,11 +8,7 @@
         <artifactId>onecx-quarkus3-parent</artifactId>
         <version>3.4.0</version>
     </parent>
-
-    <properties>
-        <quarkus.version>3.36.1</quarkus.version>
-    </properties>
-
+    
     <artifactId>onecx-notification-bff</artifactId>
     <name>OneCX Notification Backend For Frontend</name>
     <version>999-SNAPSHOT</version>
