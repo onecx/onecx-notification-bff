@@ -49,6 +49,15 @@ quarkus.http.auth.permission.eventbus.policy=permit
 include::onecx-notification-bff-extensions.adoc[opts=optional]
 ====
 
+== Connection lifecycle
+
+The BFF tracks authorized SockJS registrations per connection. A receiver remains active
+on a pod while at least one of its registered connections is open, so closing one tab does
+not interrupt live delivery to another. Live-delivered notifications are removed from the
+inbox and persisted notifications are marked delivered while the receiver is active. When
+all connections close, notifications remain in the inbox for catch-up on the next REGISTER;
+that registration continues to drain the inbox.
+
 == Helm
 
 {helm-registry}[Link to Helm registry]

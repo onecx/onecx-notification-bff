@@ -42,7 +42,7 @@ import io.vertx.mutiny.core.shareddata.AsyncMap;
  * topic listener
  * ├─► Vert.x EventBus.publish(localAddress)
  * │ └─► SockJS bridge forwards to connected browser
- * └─► if receiver is currently connected on THIS pod:
+ * └─► if receiver has at least one registered connection on THIS pod:
  * ├─► remove entry from IMap (prevent re-delivery on reconnect)
  * └─► if persist=true: markNotificationAsDelivered() on SVC
  *
@@ -119,7 +119,7 @@ public class NotificationClusterService {
      * ({@link #EB_ADDRESS_PREFIX} + receiverId) so the SockJS bridge can
      * forward it to any browser session registered on that address on this pod.
      * 4. If {@link NotificationSockJSBridge#hasActiveReceiver(String)} returns {@code true}
-     * (i.e. the receiver has an open SockJS session on this pod):
+     * (i.e. the receiver has at least one registered SockJS connection open on this pod):
      * - Removes the notification list from the IMap to prevent re-delivery on reconnect.
      * - If {@code persist=true}, calls {@code markNotificationAsDelivered(id)} on the SVC.
      */

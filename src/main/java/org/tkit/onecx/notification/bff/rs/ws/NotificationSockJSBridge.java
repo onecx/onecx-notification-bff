@@ -1,7 +1,5 @@
 package org.tkit.onecx.notification.bff.rs.ws;
 
-import java.util.Collections;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -47,17 +45,16 @@ import io.vertx.ext.web.handler.sockjs.SockJSHandlerOptions;
  * - The JWT token must be present in the JSON payload as the {@code "token"} field.
  * - The token subject ({@code sub}) is extracted and compared to the {@code receiverId}.
  * - If they do not match, the registration is rejected.
- * - If they match, the {@code receiverId} is added to {@link #ACTIVE_RECEIVERS} so the
- * cluster service knows this pod has a live session for that receiver.
+ * - If they match, the socket-to-receiver association is recorded so the cluster service
+ * knows this pod has a live session for that receiver.
  * - The IMap inbox is drained via
  * {@link NotificationClusterService#consumeByReceiverId(String)} and each
  * stored notification is immediately published to the local EventBus so the
  * bridge delivers it to the client — no separate HTTP call needed.
  * - Drained notifications with {@code persist=true} are marked as delivered
  * via the downstream SVC REST client.
- * 3. SOCKET_CLOSED — the SockJS connection was closed. {@link #ACTIVE_RECEIVERS}
- * is cleared so the cluster service will no longer remove IMap entries for subsequent
- * topic deliveries, allowing missed messages to accumulate until the next REGISTER.
+ * 3. SOCKET_CLOSED — the SockJS connection was closed. Only that socket's association
+ * is removed. A receiver remains active while any registered socket for it is open.
  *
  * Security:
  * - The initial SockJS HTTP/WebSocket handshake is open ({@code policy=permit}) for browser
@@ -84,17 +81,17 @@ public class NotificationSockJSBridge {
     public static final String BRIDGE_PATH = "/eventbus/*";
 
     /**
-     * Pod-local set of receiverIds that currently have at least one active SockJS session.
+     * Pod-local mapping of registered SockJS socket IDs to receiverIds.
      *
-     * Updated on REGISTER (add) and SOCKET_CLOSED (clear).
-     * Stored as a {@link ConcurrentHashMap} key-set because the Hazelcast topic listener
-     * in {@link NotificationClusterService} reads this set from a non-Vert.x thread.
+     * Updated on authorized REGISTER and SOCKET_CLOSED. Stored in a
+     * {@link ConcurrentHashMap} because the Hazelcast topic listener in
+     * {@link NotificationClusterService} reads it from a non-Vert.x thread.
      *
-     * The set is deliberately pod-local: each pod independently tracks its own
-     * connected sessions, which is all that is needed to decide whether to clear the
+     * The registry is deliberately pod-local: each pod independently tracks its own
+     * connected sockets, which is all that is needed to decide whether to clear the
      * IMap entry after live delivery on that pod.
      */
-    private static final Set<String> ACTIVE_RECEIVERS = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private static final ConcurrentHashMap<String, String> ACTIVE_SOCKETS = new ConcurrentHashMap<>();
 
     /**
      * Returns {@code true} if the given {@code receiverId} has at least one open SockJS
@@ -109,7 +106,7 @@ public class NotificationSockJSBridge {
      * @return {@code true} if the receiver is currently connected on this pod
      */
     public static boolean hasActiveReceiver(String receiverId) {
-        return ACTIVE_RECEIVERS.contains(receiverId);
+        return receiverId != null && ACTIVE_SOCKETS.containsValue(receiverId);
     }
 
     String extractSubjectFromRegisterPayload(BridgeEvent bridgeEvent) {
@@ -167,13 +164,11 @@ public class NotificationSockJSBridge {
      *
      * A bridge event handler intercepts all SockJS lifecycle events:
      * - SOCKET_CREATED — logs the new connection's remote address.
-     * - SOCKET_CLOSED — clears {@link #ACTIVE_RECEIVERS} so the cluster service
-     * stops removing IMap entries for this pod until the client reconnects and
-     * re-registers. Since SockJS does not expose per-socket address info on close,
-     * the whole set is cleared and rebuilt from REGISTER events on reconnect.
+     * - SOCKET_CLOSED — removes the closing socket's association. A receiver remains
+     * active while another registered socket for it remains open.
      * - REGISTER — when the address matches the notification namespace:
      * 1. Extracts the {@code receiverId} from the address suffix.
-     * 2. Adds the {@code receiverId} to {@link #ACTIVE_RECEIVERS}.
+     * 2. Records the socket-to-receiver association after validating the token subject.
      * 3. Calls {@link NotificationClusterService#consumeByReceiverId(String)} to
      * atomically drain the IMap inbox.
      * 4. Publishes each drained notification as JSON to the raw (non-Mutiny) local
@@ -213,7 +208,7 @@ public class NotificationSockJSBridge {
 
                     } else if (bridgeEvent.type() == BridgeEventType.SOCKET_CLOSED) {
                         LOG.infof("SockJS socket closed:   %s", bridgeEvent.socket().remoteAddress());
-                        ACTIVE_RECEIVERS.clear();
+                        ACTIVE_SOCKETS.remove(bridgeEvent.socket().writeHandlerID());
 
                     } else if (bridgeEvent.type() == BridgeEventType.REGISTER) {
                         String address = bridgeEvent.getRawMessage().getString("address");
@@ -232,8 +227,8 @@ public class NotificationSockJSBridge {
                                 return;
                             }
 
-                            // Mark this receiver as active on this pod
-                            ACTIVE_RECEIVERS.add(receiverId);
+                            // Track this socket once; repeated registrations overwrite the same entry.
+                            ACTIVE_SOCKETS.put(bridgeEvent.socket().writeHandlerID(), receiverId);
                             LOG.infof("Client registered for receiverId='%s' (sub='%s') — draining inbox",
                                     receiverId, subject);
 
