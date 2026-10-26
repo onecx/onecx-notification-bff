@@ -184,7 +184,9 @@ public class NotificationSockJSBridge {
         // heartbeatInterval: server sends a heartbeat frame every N ms to keep connection alive
         SockJSHandlerOptions sockJSOptions = new SockJSHandlerOptions()
                 .setHeartbeatInterval(Integer.parseInt(notificationConfig.websocketConfig().heartbeatInterval()))
-                .setSessionTimeout(Integer.parseInt(notificationConfig.websocketConfig().sessionTimeout()));
+                .setSessionTimeout(Integer.parseInt(notificationConfig.websocketConfig().sessionTimeout()))
+                // The per-socket registry uses writeHandlerID() as its key.
+                .setRegisterWriteHandler(true);
         SockJSHandler sockJSHandler = SockJSHandler.create(vertx, sockJSOptions);
 
         // Escape dots for regex: "notifications.new." → "notifications\.new\."
