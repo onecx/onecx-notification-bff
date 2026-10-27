@@ -118,6 +118,14 @@ public class NotificationSockJSBridge {
         return receiverId != null && ACTIVE_RECEIVERS.containsKey(receiverId);
     }
 
+    /** Returns the completed registration count for synchronizing connection lifecycle tests. */
+    static int activeConnectionCount(String receiverId) {
+        synchronized (ACTIVE_SOCKETS_LOCK) {
+            Set<String> socketIds = ACTIVE_RECEIVERS.get(receiverId);
+            return socketIds == null ? 0 : socketIds.size();
+        }
+    }
+
     private static void trackRegistration(String socketId, String receiverId, JsonObject message) {
         synchronized (ACTIVE_SOCKETS_LOCK) {
             SOCKET_REGISTRATIONS.computeIfAbsent(socketId, ignored -> new HashMap<>())

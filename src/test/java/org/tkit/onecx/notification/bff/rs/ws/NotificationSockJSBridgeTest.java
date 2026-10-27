@@ -1130,10 +1130,12 @@ class NotificationSockJSBridgeTest extends AbstractTest {
     private WebSocket connectAndRegister(HttpClient client, String address, String token, Queue<String> frames)
             throws Exception {
         WebSocket socket = openSockjsSocket(client, frames);
+        String receiverId = address.substring(NotificationClusterService.EB_ADDRESS_PREFIX.length());
+        int expectedConnections = NotificationSockJSBridge.activeConnectionCount(receiverId) + 1;
         socket.writeTextMessage(registerFrame(address, token));
         await().atMost(5, TimeUnit.SECONDS)
-                .untilAsserted(() -> assertThat(NotificationSockJSBridge.hasActiveReceiver(
-                        address.substring(NotificationClusterService.EB_ADDRESS_PREFIX.length()))).isTrue());
+                .untilAsserted(() -> assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId))
+                        .isEqualTo(expectedConnections));
         return socket;
     }
 

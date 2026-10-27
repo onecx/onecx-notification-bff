@@ -108,6 +108,33 @@ class NotificationSockJSBridgeLifecycleTest {
     }
 
     @ParameterizedTest
+    @EnumSource(value = BridgeEventType.class, names = { "UNREGISTER", "SOCKET_CLOSED", "SOCKET_ERROR" })
+    void activeConnectionCountTracksCompletedRegistrationsPerSocket(BridgeEventType cancellation) {
+        SockJSSocket first = socket();
+        SockJSSocket second = socket();
+        JsonObject registration = registration(receiverId);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isZero();
+
+        register(first, receiverId);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isEqualTo(1);
+
+        handle(BridgeEventType.REGISTER, second, registration);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isEqualTo(1);
+
+        handle(BridgeEventType.REGISTERED, second, registration);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isEqualTo(2);
+
+        handle(BridgeEventType.REGISTERED, second, registration);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isEqualTo(2);
+
+        handle(cancellation, second, registration);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isEqualTo(1);
+
+        handle(cancellation, first, registration);
+        assertThat(NotificationSockJSBridge.activeConnectionCount(receiverId)).isZero();
+    }
+
+    @ParameterizedTest
     @EnumSource(value = BridgeEventType.class, names = { "SOCKET_CLOSED", "SOCKET_ERROR" })
     void socketCleanupRemovesAllItsReceiversButPreservesOtherSockets(BridgeEventType cancellation) {
         SockJSSocket first = socket();
