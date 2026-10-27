@@ -291,10 +291,11 @@ class NotificationSockJSBridgeTest extends AbstractTest {
     }
 
     @Test
-    void sockjs_register_sameSocketIsIdempotentAndRejectedSocketDoesNotAffectOthers() throws Exception {
+    void sockjs_socketTracksMultipleReceiversAndRejectedRegistrationDoesNotAffectOthers() throws Exception {
         String userToken = getKeycloakUserToken(USER);
         String userId = getTokenSubject(userToken);
-        String adminId = getTokenSubject(getKeycloakUserToken(ADMIN));
+        String adminToken = getKeycloakUserToken(ADMIN);
+        String adminId = getTokenSubject(adminToken);
         String userAddress = NotificationClusterService.EB_ADDRESS_PREFIX + userId;
         String adminAddress = NotificationClusterService.EB_ADDRESS_PREFIX + adminId;
         Queue<String> validFrames = new ConcurrentLinkedQueue<>();
@@ -308,9 +309,25 @@ class NotificationSockJSBridgeTest extends AbstractTest {
             await().atMost(5, TimeUnit.SECONDS)
                     .untilAsserted(() -> assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue());
 
+            validSocket.writeTextMessage(unregisterFrame(userAddress));
+            await().atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isFalse());
+
             validSocket.writeTextMessage(registerFrame(userAddress, userToken));
             await().atMost(5, TimeUnit.SECONDS)
                     .untilAsserted(() -> assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue());
+
+            validSocket.writeTextMessage(registerFrame(adminAddress, adminToken));
+            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+                assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue();
+                assertThat(NotificationSockJSBridge.hasActiveReceiver(adminId)).isTrue();
+            });
+
+            validSocket.writeTextMessage(unregisterFrame(adminAddress));
+            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+                assertThat(NotificationSockJSBridge.hasActiveReceiver(adminId)).isFalse();
+                assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue();
+            });
 
             WebSocket rejectedSocket = openSockjsSocket(client, rejectedFrames);
             sockets.add(rejectedSocket);
@@ -322,8 +339,10 @@ class NotificationSockJSBridgeTest extends AbstractTest {
 
             closeAndAwait(rejectedSocket);
             sockets.remove(rejectedSocket);
-            assertThat(NotificationSockJSBridge.hasActiveReceiver(adminId)).isFalse();
-            assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue();
+            await().during(500, TimeUnit.MILLISECONDS).atMost(2, TimeUnit.SECONDS).untilAsserted(() -> {
+                assertThat(NotificationSockJSBridge.hasActiveReceiver(adminId)).isFalse();
+                assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue();
+            });
 
             closeAndAwait(validSocket);
             sockets.remove(validSocket);
@@ -1109,6 +1128,13 @@ class NotificationSockJSBridgeTest extends AbstractTest {
                 .put("type", "register")
                 .put("address", address)
                 .put("token", token)
+                .encode();
+    }
+
+    private String unregisterFrame(String address) {
+        return new JsonObject()
+                .put("type", "unregister")
+                .put("address", address)
                 .encode();
     }
 

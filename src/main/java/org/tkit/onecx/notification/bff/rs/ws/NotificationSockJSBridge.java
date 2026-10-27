@@ -1,5 +1,7 @@
 package org.tkit.onecx.notification.bff.rs.ws;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -40,21 +42,20 @@ import io.vertx.ext.web.handler.sockjs.SockJSHandlerOptions;
  *
  * Connection lifecycle:
  * 1. SOCKET_CREATED — a browser has opened the SockJS connection. Logged only.
- * 2. REGISTER — the browser subscribes to an EventBus address of the form
+ * 2. REGISTER — the browser requests an EventBus address of the form
  * {@code notifications.onecx.new.<receiverId>}. At this point:
  * - The JWT token must be present in the JSON payload as the {@code "token"} field.
  * - The token subject ({@code sub}) is extracted and compared to the {@code receiverId}.
  * - If they do not match, the registration is rejected.
- * - If they match, the socket-to-receiver association is recorded so the cluster service
- * knows this pod has a live session for that receiver.
- * - The IMap inbox is drained via
+ * 3. REGISTERED — after Vert.x accepts the registration, the socket-to-receiver
+ * association is recorded and the IMap inbox is drained via
  * {@link NotificationClusterService#consumeByReceiverId(String)} and each
  * stored notification is immediately published to the local EventBus so the
  * bridge delivers it to the client — no separate HTTP call needed.
  * - Drained notifications with {@code persist=true} are marked as delivered
  * via the downstream SVC REST client.
- * 3. SOCKET_CLOSED — the SockJS connection was closed. Only that socket's association
- * is removed. A receiver remains active while any registered socket for it is open.
+ * 4. UNREGISTER — removes the socket's association for that address.
+ * 5. SOCKET_CLOSED / SOCKET_ERROR — removes all associations for that socket.
  *
  * Security:
  * - The initial SockJS HTTP/WebSocket handshake is open ({@code policy=permit}) for browser
@@ -83,15 +84,19 @@ public class NotificationSockJSBridge {
     /**
      * Pod-local mapping of registered SockJS socket IDs to receiverIds.
      *
-     * Updated on authorized REGISTER and SOCKET_CLOSED. Stored in a
-     * {@link ConcurrentHashMap} because the Hazelcast topic listener in
-     * {@link NotificationClusterService} reads it from a non-Vert.x thread.
+     * The two indexes are updated together under {@link #ACTIVE_SOCKETS_LOCK}.
+     * The Hazelcast topic listener in {@link NotificationClusterService} reads
+     * {@code ACTIVE_RECEIVERS} from a non-Vert.x thread.
      *
      * The registry is deliberately pod-local: each pod independently tracks its own
      * connected sockets, which is all that is needed to decide whether to clear the
      * IMap entry after live delivery on that pod.
      */
-    private static final ConcurrentHashMap<String, String> ACTIVE_SOCKETS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Set<String>> ACTIVE_SOCKETS = new ConcurrentHashMap<>();
+
+    private static final ConcurrentHashMap<String, Set<String>> ACTIVE_RECEIVERS = new ConcurrentHashMap<>();
+
+    private static final Object ACTIVE_SOCKETS_LOCK = new Object();
 
     /**
      * Returns {@code true} if the given {@code receiverId} has at least one open SockJS
@@ -106,7 +111,55 @@ public class NotificationSockJSBridge {
      * @return {@code true} if the receiver is currently connected on this pod
      */
     public static boolean hasActiveReceiver(String receiverId) {
-        return receiverId != null && ACTIVE_SOCKETS.containsValue(receiverId);
+        return receiverId != null && ACTIVE_RECEIVERS.containsKey(receiverId);
+    }
+
+    private static void addActiveReceiver(String socketId, String receiverId) {
+        synchronized (ACTIVE_SOCKETS_LOCK) {
+            Set<String> receiverIds = ACTIVE_SOCKETS.computeIfAbsent(socketId, ignored -> new HashSet<>());
+            if (receiverIds.add(receiverId)) {
+                ACTIVE_RECEIVERS.computeIfAbsent(receiverId, ignored -> new HashSet<>()).add(socketId);
+            }
+        }
+    }
+
+    private static void removeActiveReceiver(String socketId, String receiverId) {
+        synchronized (ACTIVE_SOCKETS_LOCK) {
+            Set<String> receiverIds = ACTIVE_SOCKETS.get(socketId);
+            if (receiverIds == null || !receiverIds.remove(receiverId)) {
+                return;
+            }
+            if (receiverIds.isEmpty()) {
+                ACTIVE_SOCKETS.remove(socketId, receiverIds);
+            }
+
+            Set<String> socketIds = ACTIVE_RECEIVERS.get(receiverId);
+            if (socketIds != null && socketIds.remove(socketId) && socketIds.isEmpty()) {
+                ACTIVE_RECEIVERS.remove(receiverId, socketIds);
+            }
+        }
+    }
+
+    private static void removeSocket(String socketId) {
+        synchronized (ACTIVE_SOCKETS_LOCK) {
+            Set<String> receiverIds = ACTIVE_SOCKETS.remove(socketId);
+            if (receiverIds == null) {
+                return;
+            }
+            for (String receiverId : receiverIds) {
+                Set<String> socketIds = ACTIVE_RECEIVERS.get(receiverId);
+                if (socketIds != null && socketIds.remove(socketId) && socketIds.isEmpty()) {
+                    ACTIVE_RECEIVERS.remove(receiverId, socketIds);
+                }
+            }
+        }
+    }
+
+    private static String receiverIdFromAddress(String address) {
+        if (address == null || !address.startsWith(NotificationClusterService.EB_ADDRESS_PREFIX)) {
+            return null;
+        }
+        return address.substring(NotificationClusterService.EB_ADDRESS_PREFIX.length());
     }
 
     String extractSubjectFromRegisterPayload(BridgeEvent bridgeEvent) {
@@ -164,20 +217,24 @@ public class NotificationSockJSBridge {
      *
      * A bridge event handler intercepts all SockJS lifecycle events:
      * - SOCKET_CREATED — logs the new connection's remote address.
-     * - SOCKET_CLOSED — removes the closing socket's association. A receiver remains
-     * active while another registered socket for it remains open.
-     * - REGISTER — when the address matches the notification namespace:
-     * 1. Extracts the {@code receiverId} from the address suffix.
-     * 2. Records the socket-to-receiver association after validating the token subject.
-     * 3. Calls {@link NotificationClusterService#consumeByReceiverId(String)} to
+     * - REGISTERED — after Vert.x accepts a registration, adds its socket association
+     * and drains the receiver's inbox.
+     * - UNREGISTER — removes the association for that address.
+     * - SOCKET_CLOSED / SOCKET_ERROR — removes every association for the socket.
+     * - REGISTER — validates the token subject against the {@code receiverId}.
+     * - REGISTERED — after Vert.x accepts the registration:
+     * 1. Records the socket-to-receiver association.
+     * 2. Calls {@link NotificationClusterService#consumeByReceiverId(String)} to
      * atomically drain the IMap inbox.
-     * 4. Publishes each drained notification as JSON to the raw (non-Mutiny) local
+     * 3. Publishes each drained notification as JSON to the raw (non-Mutiny) local
      * EventBus so the bridge immediately forwards it to the waiting browser.
-     * 5. For each drained notification with {@code persist=true}, calls
+     * 4. For each drained notification with {@code persist=true}, calls
      * {@code markNotificationAsDelivered(id)} on the downstream SVC.
+     * - UNREGISTER removes only that address association; SOCKET_CLOSED and SOCKET_ERROR
+     * remove all associations for that socket.
      *
-     * All bridge events call {@code bridgeEvent.complete(true)} to allow the event to
-     * proceed normally (i.e. nothing is blocked or rejected here).
+     * Accepted bridge events call {@code bridgeEvent.complete(true)}. A REGISTER event
+     * with a mismatched token subject is rejected.
      */
     void onStart(@Observes StartupEvent event) {
         // sessionTimeout: how long a session survives without any client frame (ms)
@@ -210,15 +267,14 @@ public class NotificationSockJSBridge {
 
                     } else if (bridgeEvent.type() == BridgeEventType.SOCKET_CLOSED) {
                         LOG.infof("SockJS socket closed:   %s", bridgeEvent.socket().remoteAddress());
-                        ACTIVE_SOCKETS.remove(bridgeEvent.socket().writeHandlerID());
+                        removeSocket(bridgeEvent.socket().writeHandlerID());
 
                     } else if (bridgeEvent.type() == BridgeEventType.REGISTER) {
                         String address = bridgeEvent.getRawMessage().getString("address");
 
-                        if (address.startsWith(NotificationClusterService.EB_ADDRESS_PREFIX)) {
+                        String receiverId = receiverIdFromAddress(address);
+                        if (receiverId != null) {
                             // Extract receiverId from "notifications.new.<receiverId>"
-                            String receiverId = address.substring(
-                                    NotificationClusterService.EB_ADDRESS_PREFIX.length());
                             String subject = extractSubjectFromRegisterPayload(bridgeEvent);
 
                             if (!receiverId.equals(subject)) {
@@ -229,61 +285,64 @@ public class NotificationSockJSBridge {
                                 return;
                             }
 
-                            // Track this socket once; repeated registrations overwrite the same entry.
-                            ACTIVE_SOCKETS.put(bridgeEvent.socket().writeHandlerID(), receiverId);
-                            LOG.infof("Client registered for receiverId='%s' (sub='%s') — draining inbox",
-                                    receiverId, subject);
-
-                            // Drain IMap inbox: read + remove, then push each stored notification
-                            cacheManager.consumeByReceiverId(receiverId)
-                                    .subscribe().with(
-                                            notifications -> {
-                                                if (notifications.isEmpty()) {
-                                                    LOG.debugf("No stored notifications for receiverId='%s'",
-                                                            receiverId);
-                                                    return;
-                                                }
-                                                LOG.infof("Replaying %d stored notification(s) to '%s'",
-                                                        notifications.size(), address);
-                                                for (NotificationDTO n : notifications) {
-                                                    try {
-                                                        String json = objectMapper.writeValueAsString(n);
-                                                        // publish locally — SockJS bridge delivers to this client
-                                                        rawEventBus.publish(address, json);
-                                                        // Mark persisted notifications as delivered.
-                                                        // Must run on a worker thread — the RESTEasy Reactive
-                                                        // blocking client cannot be called from the event loop.
-                                                        if (Boolean.TRUE.equals(n.getPersist()) && n.getId() != null) {
-                                                            final String notifId = n.getId();
-                                                            vertx.executeBlocking(() -> {
-                                                                @SuppressWarnings("resource")
-                                                                var r = notificationSVCClient
-                                                                        .markNotificationAsDelivered(notifId);
-                                                                return r.getStatus();
-                                                            }).onSuccess(status -> LOG.debugf(
-                                                                    "Marked stored notification id='%s' as delivered (status=%d)",
-                                                                    notifId, status))
-                                                                    .onFailure(ex -> LOG.warnf(
-                                                                            "Failed to mark stored notification id='%s' as delivered: %s",
-                                                                            notifId, ex.getMessage()));
-                                                        }
-                                                    } catch (Exception e) {
-                                                        LOG.errorf("Failed to serialize notification: %s",
-                                                                e.getMessage());
-                                                    }
-                                                }
-                                            },
-                                            err -> LOG.errorf(
-                                                    "Failed to drain inbox for receiverId='%s': %s",
-                                                    receiverId, err.getMessage()));
                         } else {
                             LOG.debugf("Client registered on: %s", address);
                         }
+                    } else if (bridgeEvent.type() == BridgeEventType.REGISTERED) {
+                        String address = bridgeEvent.getRawMessage().getString("address");
+                        String receiverId = receiverIdFromAddress(address);
+                        if (receiverId != null) {
+                            addActiveReceiver(bridgeEvent.socket().writeHandlerID(), receiverId);
+                            LOG.infof("Client registered for receiverId='%s' — draining inbox", receiverId);
+                            drainInbox(receiverId, address, rawEventBus);
+                        }
+                    } else if (bridgeEvent.type() == BridgeEventType.UNREGISTER) {
+                        String receiverId = receiverIdFromAddress(bridgeEvent.getRawMessage().getString("address"));
+                        if (receiverId != null) {
+                            removeActiveReceiver(bridgeEvent.socket().writeHandlerID(), receiverId);
+                        }
+                    } else if (bridgeEvent.type() == BridgeEventType.SOCKET_ERROR) {
+                        removeSocket(bridgeEvent.socket().writeHandlerID());
                     }
 
                     bridgeEvent.complete(true);
                 }));
 
         LOG.info("SockJS EventBus bridge mounted on " + BRIDGE_PATH);
+    }
+
+    private void drainInbox(String receiverId, String address, EventBus rawEventBus) {
+        cacheManager.consumeByReceiverId(receiverId)
+                .subscribe().with(
+                        notifications -> {
+                            if (notifications.isEmpty()) {
+                                LOG.debugf("No stored notifications for receiverId='%s'", receiverId);
+                                return;
+                            }
+                            LOG.infof("Replaying %d stored notification(s) to '%s'", notifications.size(), address);
+                            for (NotificationDTO n : notifications) {
+                                try {
+                                    String json = objectMapper.writeValueAsString(n);
+                                    rawEventBus.publish(address, json);
+                                    if (Boolean.TRUE.equals(n.getPersist()) && n.getId() != null) {
+                                        final String notifId = n.getId();
+                                        vertx.executeBlocking(() -> {
+                                            @SuppressWarnings("resource")
+                                            var r = notificationSVCClient.markNotificationAsDelivered(notifId);
+                                            return r.getStatus();
+                                        }).onSuccess(status -> LOG.debugf(
+                                                "Marked stored notification id='%s' as delivered (status=%d)",
+                                                notifId, status))
+                                                .onFailure(ex -> LOG.warnf(
+                                                        "Failed to mark stored notification id='%s' as delivered: %s",
+                                                        notifId, ex.getMessage()));
+                                    }
+                                } catch (Exception e) {
+                                    LOG.errorf("Failed to serialize notification: %s", e.getMessage());
+                                }
+                            }
+                        },
+                        err -> LOG.errorf("Failed to drain inbox for receiverId='%s': %s",
+                                receiverId, err.getMessage()));
     }
 }
