@@ -79,10 +79,10 @@ class NotificationSockJSBridgeTest extends AbstractTest {
         assertThat(NotificationSockJSBridge.hasActiveReceiver("not-registered")).isFalse();
     }
 
-    //    @Test
-    //    void hasActiveReceiver_nullReceiver_returnsFalse() {
-    //        assertThat(NotificationSockJSBridge.hasActiveReceiver(null)).isFalse();
-    //    }
+    @Test
+    void hasActiveReceiver_nullReceiver_returnsFalse() {
+        assertThat(NotificationSockJSBridge.hasActiveReceiver(null)).isFalse();
+    }
 
     @Test
     void hasActiveReceiver_emptyString_returnsFalse() {
@@ -199,7 +199,6 @@ class NotificationSockJSBridgeTest extends AbstractTest {
         Queue<String> firstUserFrames = new ConcurrentLinkedQueue<>();
         Queue<String> secondUserFrames = new ConcurrentLinkedQueue<>();
         Queue<String> adminFrames = new ConcurrentLinkedQueue<>();
-        Queue<String> catchUpFrames = new ConcurrentLinkedQueue<>();
         HttpClient client = vertx.createHttpClient(new HttpClientOptions());
         List<WebSocket> sockets = new ArrayList<>();
 
@@ -210,11 +209,6 @@ class NotificationSockJSBridgeTest extends AbstractTest {
             sockets.add(secondUser);
             WebSocket admin = connectAndRegister(client, adminAddress, adminToken, adminFrames);
             sockets.add(admin);
-
-            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isTrue();
-                assertThat(NotificationSockJSBridge.hasActiveReceiver(adminId)).isTrue();
-            });
 
             String bothSocketsId = "multi-connection-live-" + System.nanoTime();
             clusterService.storeNotification(notification(userId, bothSocketsId, false)).await().indefinitely();
@@ -255,6 +249,33 @@ class NotificationSockJSBridgeTest extends AbstractTest {
             clusterService.storeNotification(notification(adminId, adminLiveId, false)).await().indefinitely();
             await().atMost(10, TimeUnit.SECONDS)
                     .untilAsserted(() -> assertThat(adminFrames).anyMatch(frame -> frame.contains(adminLiveId)));
+        } finally {
+            try {
+                for (WebSocket socket : sockets) {
+                    closeAndAwait(socket);
+                }
+            } finally {
+                client.close();
+            }
+        }
+    }
+
+    @Test
+    void sockjs_lastConnectionCloseRetainsNotificationsUntilReconnect() throws Exception {
+        String userToken = getKeycloakUserToken(USER);
+        String userId = getTokenSubject(userToken);
+        String userAddress = NotificationClusterService.EB_ADDRESS_PREFIX + userId;
+        Queue<String> catchUpFrames = new ConcurrentLinkedQueue<>();
+        HttpClient client = vertx.createHttpClient(new HttpClientOptions());
+        List<WebSocket> sockets = new ArrayList<>();
+
+        try {
+            WebSocket socket = connectAndRegister(client, userAddress, userToken, new ConcurrentLinkedQueue<>());
+            sockets.add(socket);
+            closeAndAwait(socket);
+            sockets.remove(socket);
+            await().atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(NotificationSockJSBridge.hasActiveReceiver(userId)).isFalse());
 
             String offlineId = "offline-catch-up-" + System.nanoTime();
             mockServerClient.when(request()

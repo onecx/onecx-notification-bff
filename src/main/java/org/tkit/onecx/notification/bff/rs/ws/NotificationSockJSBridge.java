@@ -1,6 +1,8 @@
 package org.tkit.onecx.notification.bff.rs.ws;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,7 +25,7 @@ import gen.org.tkit.onecx.notification.svc.internal.client.api.NotificationInter
 import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.EventBus;
-import io.vertx.ext.bridge.BridgeEventType;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.bridge.PermittedOptions;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.sockjs.BridgeEvent;
@@ -47,15 +49,17 @@ import io.vertx.ext.web.handler.sockjs.SockJSHandlerOptions;
  * - The JWT token must be present in the JSON payload as the {@code "token"} field.
  * - The token subject ({@code sub}) is extracted and compared to the {@code receiverId}.
  * - If they do not match, the registration is rejected.
- * 3. REGISTERED — after Vert.x accepts the registration, the socket-to-receiver
- * association is recorded and the IMap inbox is drained via
+ * - Otherwise, the registration request is tracked as pending.
+ * 3. REGISTERED — after Vert.x accepts the registration, the matching pending request
+ * becomes active and the IMap inbox is drained via
  * {@link NotificationClusterService#consumeByReceiverId(String)} and each
  * stored notification is immediately published to the local EventBus so the
  * bridge delivers it to the client — no separate HTTP call needed.
  * - Drained notifications with {@code persist=true} are marked as delivered
  * via the downstream SVC REST client.
- * 4. UNREGISTER — removes the socket's association for that address.
- * 5. SOCKET_CLOSED / SOCKET_ERROR — removes all associations for that socket.
+ * 4. UNREGISTER — cancels the socket's pending or active registration for that address.
+ * 5. SOCKET_CLOSED / SOCKET_ERROR — cancels all registrations for that socket.
+ * Late REGISTERED events for cancelled or superseded requests are ignored.
  *
  * Security:
  * - The initial SockJS HTTP/WebSocket handshake is open ({@code policy=permit}) for browser
@@ -82,7 +86,7 @@ public class NotificationSockJSBridge {
     public static final String BRIDGE_PATH = "/eventbus/*";
 
     /**
-     * Pod-local mapping of registered SockJS socket IDs to receiverIds.
+     * Pod-local mapping of SockJS socket IDs to pending or active registration requests.
      *
      * The two indexes are updated together under {@link #ACTIVE_SOCKETS_LOCK}.
      * The Hazelcast topic listener in {@link NotificationClusterService} reads
@@ -92,7 +96,7 @@ public class NotificationSockJSBridge {
      * connected sockets, which is all that is needed to decide whether to clear the
      * IMap entry after live delivery on that pod.
      */
-    private static final ConcurrentHashMap<String, Set<String>> ACTIVE_SOCKETS = new ConcurrentHashMap<>();
+    private static final Map<String, Map<String, JsonObject>> SOCKET_REGISTRATIONS = new HashMap<>();
 
     private static final ConcurrentHashMap<String, Set<String>> ACTIVE_RECEIVERS = new ConcurrentHashMap<>();
 
@@ -114,45 +118,56 @@ public class NotificationSockJSBridge {
         return receiverId != null && ACTIVE_RECEIVERS.containsKey(receiverId);
     }
 
-    private static void addActiveReceiver(String socketId, String receiverId) {
+    private static void trackRegistration(String socketId, String receiverId, JsonObject message) {
         synchronized (ACTIVE_SOCKETS_LOCK) {
-            Set<String> receiverIds = ACTIVE_SOCKETS.computeIfAbsent(socketId, ignored -> new HashSet<>());
-            if (receiverIds.add(receiverId)) {
-                ACTIVE_RECEIVERS.computeIfAbsent(receiverId, ignored -> new HashSet<>()).add(socketId);
-            }
+            SOCKET_REGISTRATIONS.computeIfAbsent(socketId, ignored -> new HashMap<>())
+                    .putIfAbsent(receiverId, message);
         }
     }
 
-    private static void removeActiveReceiver(String socketId, String receiverId) {
+    private static boolean activateRegistration(String socketId, String receiverId, JsonObject message) {
         synchronized (ACTIVE_SOCKETS_LOCK) {
-            Set<String> receiverIds = ACTIVE_SOCKETS.get(socketId);
-            if (receiverIds == null || !receiverIds.remove(receiverId)) {
+            Map<String, JsonObject> registrations = SOCKET_REGISTRATIONS.get(socketId);
+            // Vert.x reuses the REGISTER message for REGISTERED. Identity distinguishes
+            // a cancelled request from a later, otherwise identical re-registration.
+            if (registrations == null || registrations.get(receiverId) != message) {
+                return false;
+            }
+            return ACTIVE_RECEIVERS.computeIfAbsent(receiverId, ignored -> new HashSet<>()).add(socketId);
+        }
+    }
+
+    private static void removeRegistration(String socketId, String receiverId) {
+        synchronized (ACTIVE_SOCKETS_LOCK) {
+            Map<String, JsonObject> registrations = SOCKET_REGISTRATIONS.get(socketId);
+            if (registrations == null) {
                 return;
             }
-            if (receiverIds.isEmpty()) {
-                ACTIVE_SOCKETS.remove(socketId, receiverIds);
+            registrations.remove(receiverId);
+            if (registrations.isEmpty()) {
+                SOCKET_REGISTRATIONS.remove(socketId);
             }
-
-            Set<String> socketIds = ACTIVE_RECEIVERS.get(receiverId);
-            if (socketIds != null && socketIds.remove(socketId) && socketIds.isEmpty()) {
-                ACTIVE_RECEIVERS.remove(receiverId, socketIds);
-            }
+            removeActiveReceiver(socketId, receiverId);
         }
     }
 
     private static void removeSocket(String socketId) {
         synchronized (ACTIVE_SOCKETS_LOCK) {
-            Set<String> receiverIds = ACTIVE_SOCKETS.remove(socketId);
-            if (receiverIds == null) {
+            Map<String, JsonObject> registrations = SOCKET_REGISTRATIONS.remove(socketId);
+            if (registrations == null) {
                 return;
             }
-            for (String receiverId : receiverIds) {
-                Set<String> socketIds = ACTIVE_RECEIVERS.get(receiverId);
-                if (socketIds != null && socketIds.remove(socketId) && socketIds.isEmpty()) {
-                    ACTIVE_RECEIVERS.remove(receiverId, socketIds);
-                }
+            for (String receiverId : registrations.keySet()) {
+                removeActiveReceiver(socketId, receiverId);
             }
         }
+    }
+
+    private static void removeActiveReceiver(String socketId, String receiverId) {
+        ACTIVE_RECEIVERS.computeIfPresent(receiverId, (ignored, socketIds) -> {
+            socketIds.remove(socketId);
+            return socketIds.isEmpty() ? null : socketIds;
+        });
     }
 
     private static String receiverIdFromAddress(String address) {
@@ -208,6 +223,8 @@ public class NotificationSockJSBridge {
 
     private static final String REGISTER_TOKEN_FIELD = "token";
 
+    private static final String ADDRESS_FIELD = "address";
+
     /**
      * Configures and mounts the SockJS EventBus bridge at application startup.
      *
@@ -217,21 +234,18 @@ public class NotificationSockJSBridge {
      *
      * A bridge event handler intercepts all SockJS lifecycle events:
      * - SOCKET_CREATED — logs the new connection's remote address.
-     * - REGISTERED — after Vert.x accepts a registration, adds its socket association
-     * and drains the receiver's inbox.
-     * - UNREGISTER — removes the association for that address.
-     * - SOCKET_CLOSED / SOCKET_ERROR — removes every association for the socket.
-     * - REGISTER — validates the token subject against the {@code receiverId}.
+     * - REGISTER — validates the token subject against the {@code receiverId}
+     * and tracks the pending request.
      * - REGISTERED — after Vert.x accepts the registration:
-     * 1. Records the socket-to-receiver association.
+     * 1. Activates the matching request, unless it has been cancelled or already activated.
      * 2. Calls {@link NotificationClusterService#consumeByReceiverId(String)} to
      * atomically drain the IMap inbox.
      * 3. Publishes each drained notification as JSON to the raw (non-Mutiny) local
      * EventBus so the bridge immediately forwards it to the waiting browser.
      * 4. For each drained notification with {@code persist=true}, calls
      * {@code markNotificationAsDelivered(id)} on the downstream SVC.
-     * - UNREGISTER removes only that address association; SOCKET_CLOSED and SOCKET_ERROR
-     * remove all associations for that socket.
+     * - UNREGISTER cancels only that address registration; SOCKET_CLOSED and SOCKET_ERROR
+     * cancel all pending and active registrations for that socket.
      *
      * Accepted bridge events call {@code bridgeEvent.complete(true)}. A REGISTER event
      * with a mismatched token subject is rejected.
@@ -257,58 +271,60 @@ public class NotificationSockJSBridge {
                 .setPingTimeout(Integer.parseInt(notificationConfig.websocketConfig().pingTimeout()));
         // No inbound permitted — browsers cannot publish to the EventBus
 
-        // Get raw (non-Mutiny) EventBus for local publish inside the bridge handler
-        EventBus rawEventBus = vertx.eventBus();
-
         router.route(BRIDGE_PATH).subRouter(
-                sockJSHandler.bridge(bridgeOptions, bridgeEvent -> {
-                    if (bridgeEvent.type() == BridgeEventType.SOCKET_CREATED) {
-                        LOG.infof("SockJS socket created: %s", bridgeEvent.socket().remoteAddress());
-
-                    } else if (bridgeEvent.type() == BridgeEventType.SOCKET_CLOSED) {
-                        LOG.infof("SockJS socket closed:   %s", bridgeEvent.socket().remoteAddress());
-                        removeSocket(bridgeEvent.socket().writeHandlerID());
-
-                    } else if (bridgeEvent.type() == BridgeEventType.REGISTER) {
-                        String address = bridgeEvent.getRawMessage().getString("address");
-
-                        String receiverId = receiverIdFromAddress(address);
-                        if (receiverId != null) {
-                            // Extract receiverId from "notifications.new.<receiverId>"
-                            String subject = extractSubjectFromRegisterPayload(bridgeEvent);
-
-                            if (!receiverId.equals(subject)) {
-                                LOG.warnf(
-                                        "Rejecting SockJS register for address='%s': token subject '%s' is not allowed to subscribe as receiverId '%s'",
-                                        address, subject, receiverId);
-                                bridgeEvent.complete(false);
-                                return;
-                            }
-
-                        } else {
-                            LOG.debugf("Client registered on: %s", address);
-                        }
-                    } else if (bridgeEvent.type() == BridgeEventType.REGISTERED) {
-                        String address = bridgeEvent.getRawMessage().getString("address");
-                        String receiverId = receiverIdFromAddress(address);
-                        if (receiverId != null) {
-                            addActiveReceiver(bridgeEvent.socket().writeHandlerID(), receiverId);
-                            LOG.infof("Client registered for receiverId='%s' — draining inbox", receiverId);
-                            drainInbox(receiverId, address, rawEventBus);
-                        }
-                    } else if (bridgeEvent.type() == BridgeEventType.UNREGISTER) {
-                        String receiverId = receiverIdFromAddress(bridgeEvent.getRawMessage().getString("address"));
-                        if (receiverId != null) {
-                            removeActiveReceiver(bridgeEvent.socket().writeHandlerID(), receiverId);
-                        }
-                    } else if (bridgeEvent.type() == BridgeEventType.SOCKET_ERROR) {
-                        removeSocket(bridgeEvent.socket().writeHandlerID());
-                    }
-
-                    bridgeEvent.complete(true);
-                }));
+                sockJSHandler.bridge(bridgeOptions, this::handleBridgeEvent));
 
         LOG.info("SockJS EventBus bridge mounted on " + BRIDGE_PATH);
+    }
+
+    void handleBridgeEvent(BridgeEvent bridgeEvent) {
+        switch (bridgeEvent.type()) {
+            case SOCKET_CREATED -> LOG.infof("SockJS socket created: %s", bridgeEvent.socket().remoteAddress());
+            case SOCKET_CLOSED -> {
+                LOG.infof("SockJS socket closed:   %s", bridgeEvent.socket().remoteAddress());
+                removeSocket(bridgeEvent.socket().writeHandlerID());
+            }
+            case SOCKET_ERROR -> removeSocket(bridgeEvent.socket().writeHandlerID());
+            case REGISTER -> {
+                String address = bridgeEvent.getRawMessage().getString(ADDRESS_FIELD);
+                String receiverId = receiverIdFromAddress(address);
+                if (receiverId != null) {
+                    String subject = extractSubjectFromRegisterPayload(bridgeEvent);
+                    if (!receiverId.equals(subject)) {
+                        LOG.warnf(
+                                "Rejecting SockJS register for address='%s': token subject '%s' is not allowed to subscribe as receiverId '%s'",
+                                address, subject, receiverId);
+                        bridgeEvent.complete(false);
+                        return;
+                    }
+                    trackRegistration(bridgeEvent.socket().writeHandlerID(), receiverId, bridgeEvent.getRawMessage());
+                } else {
+                    LOG.debugf("Client registered on: %s", address);
+                }
+            }
+            case REGISTERED -> {
+                String address = bridgeEvent.getRawMessage().getString(ADDRESS_FIELD);
+                String receiverId = receiverIdFromAddress(address);
+                if (receiverId != null && activateRegistration(
+                        bridgeEvent.socket().writeHandlerID(), receiverId, bridgeEvent.getRawMessage())) {
+                    LOG.infof("Client registered for receiverId='%s' — draining inbox", receiverId);
+                    drainInbox(receiverId, address, vertx.eventBus());
+                } else {
+                    LOG.debugf("Ignoring inactive or duplicate SockJS registration for address='%s'", address);
+                }
+            }
+            case UNREGISTER -> {
+                String receiverId = receiverIdFromAddress(bridgeEvent.getRawMessage().getString(ADDRESS_FIELD));
+                if (receiverId != null) {
+                    removeRegistration(bridgeEvent.socket().writeHandlerID(), receiverId);
+                }
+            }
+            default -> {
+                // Other bridge events do not change notification registrations.
+            }
+        }
+
+        bridgeEvent.complete(true);
     }
 
     private void drainInbox(String receiverId, String address, EventBus rawEventBus) {

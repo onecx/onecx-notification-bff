@@ -55,8 +55,13 @@ The BFF tracks authorized SockJS registrations per connection. A receiver remain
 on a pod while at least one of its registered connections is open, so closing one tab does
 not interrupt live delivery to another. Live-delivered notifications are removed from the
 inbox and persisted notifications are marked delivered while the receiver is active. When
-all connections close, notifications remain in the inbox for catch-up on the next REGISTER;
-that registration continues to drain the inbox.
+all connections close or unregister, notifications remain in the inbox for catch-up on the
+next successful registration. A REGISTER request is pending until Vert.x confirms it with
+REGISTERED; only then does it make the receiver active and drain the inbox. UNREGISTER
+cancels the matching pending or active registration, while socket close or error cancels
+all registrations for that connection. Late confirmations for cancelled or superseded
+requests cannot reactivate a receiver or drain its inbox. One connection may register
+multiple receivers, with activity tracked independently for each address.
 
 == Helm
 
