@@ -53,12 +53,14 @@ import io.vertx.ext.web.handler.sockjs.SockJSHandlerOptions;
  * It is pending after an authorized REGISTER and active only after the matching REGISTERED.
  * An open socket alone does not make a receiver active.</li>
  * </ul>
- * <p>The registry tracks at most one registration per socket/receiver pair. A socket can
+ * <p>
+ * The registry tracks at most one registration per socket/receiver pair. A socket can
  * have registrations for multiple receivers (each separately authorized), and a receiver
  * can have registrations on multiple sockets. For example, two registered tabs for the
  * same receiver mean one receiver, two sockets, and two active registrations. Closing
  * one tab removes only its registration; the receiver stays active through the other tab.
- * All registration state described here is local to this pod.</p>
+ * All registration state described here is local to this pod.
+ * </p>
  *
  * Connection lifecycle:
  * 1. SOCKET_CREATED — a browser has opened the SockJS connection. Logged only.
