@@ -40,9 +40,9 @@ import io.vertx.mutiny.core.shareddata.AsyncMap;
  * │
  * ▼ (on every pod, including the one that published)
  * topic listener
- * ├─► Vert.x EventBus.publish(localAddress)
+ * ├─► Local event bus: publish(localAddress)
  * │ └─► SockJS bridge forwards to connected browser
- * └─► if receiver is currently connected on THIS pod:
+ * └─► if receiver has at least one registered connection on THIS pod:
  * ├─► remove entry from IMap (prevent re-delivery on reconnect)
  * └─► if persist=true: markNotificationAsDelivered() on SVC
  *
@@ -54,7 +54,7 @@ import io.vertx.mutiny.core.shareddata.AsyncMap;
  *
  * Key constants:
  * - {@link #MAP_NAME} — name of the cluster-wide Hazelcast IMap used as the inbox store
- * - {@link #EB_ADDRESS_PREFIX} — prefix of the local Vert.x EventBus addresses;
+ * - {@link #EB_ADDRESS_PREFIX} — prefix of the local event bus addresses;
  * full address is {@code EB_ADDRESS_PREFIX + receiverId}
  * - {@code TOPIC_NAME} — name of the Hazelcast ITopic used for cross-pod fan-out
  */
@@ -66,7 +66,7 @@ public class NotificationClusterService {
     public static final String MAP_NAME = "notifications";
 
     /**
-     * Prefix for local Vert.x EventBus addresses.
+     * Prefix for local event bus addresses.
      * The full address for a receiver is {@code EB_ADDRESS_PREFIX + receiverId},
      * e.g. {@code "notifications.onecx.new.receiver1"}.
      * The SockJS bridge exposes this namespace to connected browsers.
@@ -110,16 +110,15 @@ public class NotificationClusterService {
      * Retrieves the Hazelcast instance (registered globally by the vertx-hazelcast integration)
      * and subscribes a MessageListener to {@code TOPIC_NAME}.
      *
-     * The listener runs on a Hazelcast thread (not a Vert.x thread). For every received
+     * The listener runs on a Hazelcast thread (not an event-loop thread). For every received
      * topic message it:
      * 1. Deserializes the JSON payload back into a {@link NotificationDTO}.
-     * 2. Switches onto the Vert.x event loop via {@code vertx.runOnContext()} so that
-     * the EventBus publish is thread-safe.
-     * 3. Publishes the raw JSON string to the local Vert.x EventBus address
+     * 2. Switches onto the event loop via {@code vertx.runOnContext()} to handle local delivery.
+     * 3. Publishes the raw JSON string to the local event bus address
      * ({@link #EB_ADDRESS_PREFIX} + receiverId) so the SockJS bridge can
      * forward it to any browser session registered on that address on this pod.
      * 4. If {@link NotificationSockJSBridge#hasActiveReceiver(String)} returns {@code true}
-     * (i.e. the receiver has an open SockJS session on this pod):
+     * (i.e. the receiver has at least one registered SockJS connection open on this pod):
      * - Removes the notification list from the IMap to prevent re-delivery on reconnect.
      * - If {@code persist=true}, calls {@code markNotificationAsDelivered(id)} on the SVC.
      */

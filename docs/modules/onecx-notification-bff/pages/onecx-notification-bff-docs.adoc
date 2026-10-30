@@ -36,7 +36,6 @@ quarkus.http.auth.permission.eventbus.paths=/eventbus/*
 quarkus.http.auth.permission.eventbus.policy=permit
 ## Keep long-lived WebSocket / SockJS connections alive.
 ## idle-timeout=0 disables the HTTP connection idle timeout server-wide
-## Vert.x underlying TCP options ? disable idle timeout on the HTTP server transport
 %prod.hazelcast.config.file=/deployments/hazelcast-k8s.xml
 %prod.quarkus.log.category."com.hazelcast".level=INFO
 ----
@@ -48,6 +47,20 @@ quarkus.http.auth.permission.eventbus.policy=permit
 ====
 include::onecx-notification-bff-extensions.adoc[opts=optional]
 ====
+
+== Connection lifecycle
+
+The BFF tracks authorized SockJS registrations per connection. A receiver remains active
+on a pod while at least one of its registered connections is open, so closing one tab does
+not interrupt live delivery to another. Live-delivered notifications are removed from the
+inbox and persisted notifications are marked delivered while the receiver is active. When
+all connections close or unregister, notifications remain in the inbox for catch-up on the
+next successful registration. A REGISTER request is pending until the SockJS event bus bridge confirms it with
+REGISTERED; only then does it make the receiver active and drain the inbox. UNREGISTER
+cancels the matching pending or active registration, while socket close or error cancels
+all registrations for that connection. Late confirmations for cancelled or superseded
+requests cannot reactivate a receiver or drain its inbox. One connection may register
+multiple receivers, with activity tracked independently for each address.
 
 == Helm
 
@@ -76,7 +89,7 @@ app:
  env:
   JAVA_OPTS: "-Dvertx.hazelcast.config=/deployments/hazelcast-k8s.xml -Dhazelcast.config=/deployments/hazelcast-k8s.xml"
  # Custom env vars with valueFrom (Kubernetes Downward API)
- # POD_IP is used by Vert.x as the cluster host via application.properties
+ # POD_IP sets the event bus cluster host via application.properties
  envCustom:
   - name: POD_IP
     valueFrom:
